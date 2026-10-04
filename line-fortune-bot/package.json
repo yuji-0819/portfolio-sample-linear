@@ -1,0 +1,21 @@
+{
+  "name": "line-fortune-bot",
+  "version": "1.0.0",
+  "description": "公式LINE向け 占い師キャラクター自動返信ボット（LINE Messaging API + Claude）",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --env-file-if-exists=.env --watch src/server.js",
+    "chat": "node --env-file-if-exists=.env src/chat-cli.js",
+    "check": "node src/check.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "@line/bot-sdk": "^11.3.0",
+    "express": "^5.2.1"
+  }
+}
