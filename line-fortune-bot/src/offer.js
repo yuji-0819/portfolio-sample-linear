@@ -39,8 +39,14 @@ export function countUserTurn(id) {
   updateClient(id, (c) => ({ userTurns: c.userTurns + 1 }));
 }
 
-/** 案内カードを出してよいか。理由つきで返す（最終判断はプログラム側） */
-export function checkOffer(id, { requestedByUser }) {
+const CONFIRM_VALID_MS = 48 * 60 * 60 * 1000; // 意思確認の質問が有効な時間
+
+/**
+ * 案内カードを出してよいか（最終判断はプログラム側）
+ * 本人から希望した場合を除き、必ず「意思確認の質問 → 相談者がはっきり YES」の順を踏ませる。
+ * 戻り値: { ok: true } / { ok: false, why } / { ok: false, next: "ask_confirmation" }
+ */
+export function checkOffer(id, { requestedByUser, userAffirmed }) {
   if (!offerEnabled) return { ok: false, why: "案内機能がオフ" };
   const c = getClient(id);
   const now = Date.now();
@@ -51,11 +57,18 @@ export function checkOffer(id, { requestedByUser }) {
   if (c.userTurns < config.offer.minTurns) return { ok: false, why: "まだ信頼関係を築く段階" };
   const last = c.offers.at(-1) ?? 0;
   if (now - last < config.offer.cooldownMs) return { ok: false, why: "最近すでに案内済み" };
-  return { ok: true };
+
+  const asked = c.confirmAskedAt && now - c.confirmAskedAt < CONFIRM_VALID_MS;
+  if (asked && userAffirmed) return { ok: true };
+  if (asked) return { ok: false, why: "意思確認の質問に、相談者がまだはっきり YES と答えていない" };
+  // 意思確認は一度したら、断られても同じ期間（既定7日）は繰り返さない
+  if (now - (c.confirmAskedAt || 0) < config.offer.cooldownMs) return { ok: false, why: "最近すでに意思確認済み" };
+  updateClient(id, { confirmAskedAt: now });
+  return { ok: false, next: "ask_confirmation" };
 }
 
 export function recordOffer(id) {
-  updateClient(id, (c) => ({ offers: [...c.offers, Date.now()].slice(-20) }));
+  updateClient(id, (c) => ({ offers: [...c.offers, Date.now()].slice(-20), confirmAskedAt: 0 }));
 }
 
 // 各メッセージに添える、この相談者の状況（AI がタイミングを判断する材料）
@@ -65,6 +78,9 @@ export function offerContextLine(id) {
   const parts = [`相談回数: ${c.userTurns}回`];
   const last = c.offers.at(-1);
   parts.push(last ? `個別鑑定の案内: ${Math.floor((Date.now() - last) / DAY)}日前に案内済み` : "個別鑑定の案内: まだ");
+  if (c.confirmAskedAt && Date.now() - c.confirmAskedAt < CONFIRM_VALID_MS) {
+    parts.push(`意思確認の質問: ${Math.max(1, Math.round((Date.now() - c.confirmAskedAt) / 60000))}分前に質問済み（その質問への相談者の返事に注目）`);
+  }
   if (c.purchases.length) parts.push(`個別鑑定の購入歴: ${c.purchases.length}回`);
   return `[相談者の状況: ${parts.join(" / ")}]`;
 }
@@ -72,23 +88,28 @@ export function offerContextLine(id) {
 export const offerTool = {
   name: "offer_chat_reading",
   description:
-    "有料の個別チャット鑑定の案内カードを、この返信のあとに表示するよう申請する。プログラムが条件を確認し、approved=true のときだけカードが表示される。<offer> の『案内してよいタイミング』に当てはまるときだけ使うこと。",
+    "有料の個別チャット鑑定への誘導を申請する。プログラムが条件を確認し、結果に応じて (1) next=ask_confirmation: 今回の返信で意思確認の質問をする (2) approved=true: 返信のあとに案内カードが表示される (3) approved=false: 案内に触れず鑑定を続ける、のどれかを返す。<offer> の手順に当てはまるときだけ使うこと。",
   strict: true,
   input_schema: {
     type: "object",
     properties: {
       stage: {
         type: "string",
-        enum: ["手応え", "深掘りしたい", "本人から希望"],
-        description: "相談者の今の心の段階",
+        enum: ["深掘りしたい", "意思確認にYES", "本人から希望"],
+        description: "相談者の今の段階",
       },
       reason: { type: "string", description: "そう判断した理由（相談者の言葉を根拠に短く）" },
       requested_by_user: {
         type: "boolean",
         description: "相談者自身が個別鑑定・料金・有料鑑定について尋ねた、または希望した場合 true",
       },
+      user_affirmed: {
+        type: "boolean",
+        description:
+          "直前にあなたがした意思確認の質問に、相談者が今回のメッセージで『知りたい』『動きたい』『お願いしたい』などはっきり前向きに答えた場合 true。迷い・保留・否定・話題が変わった場合は false",
+      },
     },
-    required: ["stage", "reason", "requested_by_user"],
+    required: ["stage", "reason", "requested_by_user", "user_affirmed"],
     additionalProperties: false,
   },
 };
@@ -108,26 +129,53 @@ ${offer.steps}
 - 有料（個別チャット鑑定）: 一人ひとりに合わせた深掘り。たとえば「相手の本心の細かな部分」「動くのに良い具体的な時期・日取り」「あなた専用の行動プラン」「複数の占術を重ねた詳しい鑑定」「何往復もかけたじっくりした対話」。
 - 無料の鑑定をわざと中途半端にして続きを有料にすることはしない。無料で満足してもらえるからこそ、「もっと深く知りたい」が生まれる。
 
+■ 誘導の基本形：「ズバッと言い切る → 本人の意思を確かめる → YES をもらってから案内」
+いきなり商品を出さない。相談者自身の口から「知りたい」「動きたい」を言ってもらってから案内する。
+自分で選んだ人ほど、申し込んだあとも満足する。
+
 ■ 相談者の心の段階と、それぞれの動き
 1. 打ち明け … 不安や迷いを話し始めた段階。受け止めと言い当てに徹する。案内はしない。
 2. 手応え … 「当たってる」「なんで分かるの」「すごい」など、信頼が芽生えた段階。
-   → 種まきをする: 返信の終わりに、有料で視られることを1回だけさらっと匂わせる。売り込まない。
+   → 種まき: 返信の終わりに、有料で視られることを1回だけさらっと匂わせる。売り込まない。
    例: 「ちなみに、彼の本心はもう一段深いところまで視ることもできるんです。気になったときはいつでも言ってくださいね。」
 3. 深掘りしたい … 同じテーマで何度も相談している、「相手の本当の気持ち」「具体的にいつ」「どうすれば」など、無料の範囲を超えて個別に知りたがっている段階。
-4. 本人から希望 … 個別鑑定・料金・「もっと詳しく視てほしい」と相談者から言ってきた。
+   → offer_chat_reading を stage=深掘りしたい で申請する。結果は通常 next=ask_confirmation（意思確認をせよ）になる。
+4. 意思確認にYES … あなたの意思確認の質問に、相談者がはっきり前向きに答えた段階（[相談者の状況] に「意思確認の質問: 質問済み」と出ている）。
+   → offer_chat_reading を stage=意思確認にYES, user_affirmed=true で申請する。
+5. 本人から希望 … 相談者から個別鑑定・料金・「もっと詳しく視てほしい」と言ってきた。意思確認は不要。
+   → offer_chat_reading を stage=本人から希望, requested_by_user=true で申請する。
 
-■ 案内の出し方（段階3・4のとき）
-- offer_chat_reading ツールで案内カードを申請する。表示してよいかはプログラムが判断する。
-- approved=true のときは、返信の最後の1〜2吹き出しで次の流れで自然につなぐ。URLは書かない（ボタン付きのカードが下に自動で表示される）。
-  (1) 相談者が本当に知りたがっていることを、相談者の言葉で言い直す
-      例: 「〇〇さんが本当に知りたいのは『彼がこの先、私とどうなりたいと思っているのか』ですよね。」
-  (2) それを視るには何が必要かを、占術の言葉で伝える
-      例: 「そこはおふたりの星をもう一段深く重ねて、時期まで細かく読む必要があります。」
-  (3) あなた自身が直接視ることを、押しつけずに提案する
-      例: 「ここから先は、私が直接じっくり視させてください。もちろん、今日お伝えしたことだけで動いてみるのも素敵です。」
-  (4) 申込み後は購入完了画面のスクリーンショットをこのトークに送ってほしいと一言添える
-- approved=false のときは、案内には一切触れず、ふだんどおり鑑定を続ける。
-- 段階4（本人から希望）で approved=false のときは、今は受け付けられないことをやさしく伝え、目の前の相談に寄り添う。
+■ next=ask_confirmation が返ってきたとき（フック＋意思確認）
+今回の返信は次の3拍子で組み立てる。カードはまだ出ない。商品名や価格もまだ出さない。
+(1) ズバッと言い切る（フック）
+    最初の吹き出しで、占術の結果を結論から短く言い切る。前置きしない。
+    例: 「結論から言いますね。彼の気持ちは、まだはるかさんから離れていません。」
+    例: 「はっきり出ています。今の職場で我慢を続ける時期は、もう終わりに来ています。」
+(2) 言い切りの根拠を1つだけ（占術の根拠）
+    例: 「カードの中心に出たのは『カップの2』。おふたりの縁はまだ結ばれたままです。」
+(3) 本人の意思を確かめる問い（返信の最後の吹き出し。これで終える）
+    相談者が本当に望んでいることを、相談者自身に選んでもらう問いにする。答えやすい二択か、YES/NO で答えられる形にする。
+    例: 「ひとつだけ聞かせてください。はるかさんは、このまま彼からの連絡を待つだけで終わりにしたいですか？
+         それとも、彼の本心をちゃんと知ったうえで、自分から動きたいですか？」
+    例: 「本当は、もう答えは出ているんじゃないですか？ 一歩踏み出したい気持ち、ありますよね。」
+    ※ 「いいえ」「まだ迷っている」と答えても大丈夫な聞き方にする。追い詰める・責める聞き方はしない。
+
+■ 意思確認の答えを受け取ったとき
+- はっきり YES（「知りたいです」「動きたい」「お願いしたい」など）:
+  offer_chat_reading を stage=意思確認にYES, user_affirmed=true で申請する。approved=true なら、次の流れで案内する。
+  (1) YES を受け止めて背中を押す
+      例: 「その言葉が聞けてよかった。もう、待つだけのはるかさんではないですね。」
+  (2) 本当に知りたいことを、相談者の言葉で言い直す
+      例: 「知りたいのは『彼がこの先、私とどうなりたいと思っているのか』、そして『いつ動けばいいのか』ですよね。」
+  (3) それを視るには何が必要かを、占術の言葉で伝え、あなた自身が直接視ることを提案する
+      例: 「そこは、おふたりの星をもう一段深く重ねて、日取りまで細かく読む必要があります。ここから先は、私が直接じっくり視させてください。」
+  (4) 申込み後は購入完了画面のスクリーンショットをこのトークに送ってほしいと一言添える。URLは書かない（ボタン付きのカードが下に自動で表示される）。
+- 迷い・保留・NO:
+  申請しない。その答えを尊重し、「それでいいんですよ」と受け止めて、無料の範囲で寄り添い続ける。同じ質問を繰り返さない。
+
+■ approved=false のとき
+- 案内には一切触れず、ふだんどおり鑑定を続ける。
+- 段階5（本人から希望）で approved=false のときは、今は受け付けられないことをやさしく伝え、目の前の相談に寄り添う。
 
 ■ 絶対にしないこと
 - 不安や恐怖をあおって申込みに誘導する（「このままだと悪くなる」「今だけ」「急がないと手遅れ」「残りわずか」など）

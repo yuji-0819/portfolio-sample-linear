@@ -85,8 +85,21 @@ async function callClaude(messages) {
 // 案内カードの申請：出してよいかはプログラムが判定する
 function handleOfferRequest(userId, input, state) {
   if (state.offer) return { approved: true, note: "この返信ではすでに承認済み" };
-  const check = checkOffer(userId, { requestedByUser: Boolean(input?.requested_by_user) });
-  console.log(`[offer] ${userId} stage=${input?.stage} approved=${check.ok} ${check.why ?? ""} / ${input?.reason ?? ""}`);
+  const check = checkOffer(userId, {
+    requestedByUser: Boolean(input?.requested_by_user),
+    userAffirmed: Boolean(input?.user_affirmed),
+  });
+  console.log(
+    `[offer] ${userId} stage=${input?.stage} affirmed=${input?.user_affirmed} → ${check.ok ? "approved" : check.next ?? `rejected (${check.why})`} / ${input?.reason ?? ""}`,
+  );
+  if (check.next === "ask_confirmation") {
+    return {
+      approved: false,
+      next: "ask_confirmation",
+      instruction:
+        "まだカードは出さない。今回の返信は <offer> の『フック＋意思確認』の3拍子（ズバッと言い切る → 根拠を1つ → 本人の意思を確かめる問いで終える）で組み立てること。商品名・価格はまだ出さない。",
+    };
+  }
   if (!check.ok) return { approved: false, reason: check.why };
   state.offer = true;
   return { approved: true };

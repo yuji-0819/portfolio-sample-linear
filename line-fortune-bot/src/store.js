@@ -34,6 +34,7 @@ const blank = () => ({
   historyUpdatedAt: 0,
   userTurns: 0, // これまでの相談メッセージ数（累計）
   offers: [], // 案内カードを出した日時
+  confirmAskedAt: 0, // 意思確認の質問をした日時
   lastCrisisAt: 0, // 命に関わる言葉が出た日時
   purchases: [], // 購入スクショを受け取った日時
   mode: "ai", // "ai" | "human"（有人対応中）
