@@ -3,9 +3,11 @@
 // - 返信前にまとめて「既読」をつける（読んでから少し考えて返す流れ）
 // - 返信を待っている相談が多いほど、返信は遅くなる
 // - 深夜は返さず、朝になってから返す
+// - ただし命に関わる言葉があるときは、待たせずにすぐ返す
 // 予約はファイルに保存されるので、再起動しても消えない
 import { config } from "./config.js";
 import { allJobs, deleteJob, getJob, setJob } from "./store.js";
+import { isCrisisText } from "./offer.js";
 
 const MIN = 60_000;
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -39,12 +41,15 @@ function pickDueAt(now) {
 export function queueConsult({ convoId, userId, sourceType, text, replyToken, markAsReadToken }) {
   const now = Date.now();
   const item = { text, at: now, markAsReadToken: markAsReadToken ?? null, read: false };
+  const urgent = isCrisisText(text);
+  const urgentDue = now + rand(0.3, 1) * MIN;
   const job = getJob(convoId);
   if (job?.kind === "consult") {
-    setJob(convoId, { ...job, items: [...job.items, item], replyToken });
-    return job.dueAt;
+    const dueAt = urgent ? Math.min(job.dueAt, urgentDue) : job.dueAt;
+    setJob(convoId, { ...job, items: [...job.items, item], replyToken, dueAt, readAt: Math.min(job.readAt, dueAt) });
+    return dueAt;
   }
-  const dueAt = pickDueAt(now);
+  const dueAt = urgent ? urgentDue : pickDueAt(now);
   const readAt = Math.min(skipQuietHours(now + (dueAt - now) * rand(0.25, 0.8)), dueAt - 30_000);
   setJob(convoId, { kind: "consult", convoId, userId, sourceType, receivedAt: now, dueAt, readAt, replyToken, items: [item] });
   return dueAt;

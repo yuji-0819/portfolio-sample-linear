@@ -30,8 +30,9 @@ if (offer && !offerEnabled) console.warn("[offer] fortune/offer.md の base_url 
 
 // 命に関わる言葉（見つけたら一定期間、案内を止める）
 const CRISIS_WORDS = ["死にたい", "しにたい", "消えたい", "自殺", "生きていたくない", "生きてる意味", "生きる意味がない", "リスカ", "リストカット", "自傷", "楽になりたい"];
+export const isCrisisText = (text) => CRISIS_WORDS.some((w) => text.includes(w));
 export function noteCrisisSignals(id, text) {
-  if (CRISIS_WORDS.some((w) => text.includes(w))) updateClient(id, { lastCrisisAt: Date.now() });
+  if (isCrisisText(text)) updateClient(id, { lastCrisisAt: Date.now() });
 }
 
 export function countUserTurn(id) {
