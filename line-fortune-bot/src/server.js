@@ -4,6 +4,7 @@ import { messagingApi, middleware, HTTPFetchError } from "@line/bot-sdk";
 import { config } from "./config.js";
 import { FALLBACK_REPLY, fortuneInfo, replyAsFortuneTeller } from "./fortune.js";
 import { clearHistory } from "./history.js";
+import { cancelConsult, queueConsult, queueSend, startScheduler } from "./scheduler.js";
 import { loadWelcomeMessage } from "./prompt.js";
 import { toLineMessages } from "./line.js";
 import { offerCard, offerEnabled } from "./offer.js";
@@ -28,33 +29,24 @@ const welcome = loadWelcomeMessage();
 const RESET_WORDS = new Set(["リセット", "りせっと", "reset"]);
 const text = (t) => ({ type: "text", text: t });
 
-// 同じ人から続けて送られたメッセージは順番に処理する（会話履歴が混ざらないように）
-const queues = new Map();
-function enqueue(key, task) {
-  const prev = queues.get(key) ?? Promise.resolve();
-  const next = prev.then(task, task).finally(() => {
-    if (queues.get(key) === next) queues.delete(key);
-  });
-  queues.set(key, next);
-  return next;
-}
-
-// 返信トークンの期限切れなどで reply が失敗したら push で送り直す
-async function send(event, messages) {
-  try {
-    await line.replyMessage({ replyToken: event.replyToken, messages });
-  } catch (err) {
-    const to = event.source.groupId ?? event.source.roomId ?? event.source.userId;
-    if (!(err instanceof HTTPFetchError) || !to) throw err;
-    console.warn("[line] reply failed, falling back to push:", err.status, err.body);
-    await line.pushMessage({ to, messages });
+// まず無料のリプライで送り、返信トークンが期限切れならプッシュで送り直す
+async function sendTo({ replyToken, to }, messages) {
+  if (replyToken) {
+    try {
+      await line.replyMessage({ replyToken, messages });
+      return "reply";
+    } catch (err) {
+      if (!(err instanceof HTTPFetchError) || !to) throw err;
+    }
   }
+  await line.pushMessage({ to, messages });
+  return "push";
 }
 
-function showLoading(event) {
+function showLoading(sourceType, userId) {
   // 1対1トークでは「入力中…」のアニメーションを出す（グループでは使えない）
-  if (event.source.type === "user") {
-    line.showLoadingAnimation({ chatId: event.source.userId, loadingSeconds: 60 }).catch(() => {});
+  if (sourceType === "user") {
+    line.showLoadingAnimation({ chatId: userId, loadingSeconds: 60 }).catch(() => {});
   }
 }
 
@@ -81,12 +73,20 @@ async function notifyAdmin(message) {
   });
 }
 
-// 画像：購入完了スクショなら有人対応へ切り替える
+// 画像：購入完了スクショなら有人対応へ切り替える。それ以外はふつうの相談として返信を予約
 async function handleImage(event, convoId) {
-  if (!offerEnabled || event.source.type !== "user") {
-    return send(event, [text("ありがとうございます🌙\nご相談はぜひ文字で送ってくださいね。")]);
-  }
-  showLoading(event);
+  const consult = (text) =>
+    queueConsult({
+      convoId,
+      userId: event.source.userId,
+      sourceType: event.source.type,
+      text,
+      replyToken: event.replyToken,
+      markAsReadToken: event.message.markAsReadToken,
+    });
+
+  if (!offerEnabled || event.source.type !== "user") return consult("（画像が送られてきました）");
+
   let check = { is_purchase_complete: false, item_name: "" };
   try {
     const buf = await readStream(await blob.getMessageContent(event.message.id));
@@ -95,15 +95,19 @@ async function handleImage(event, convoId) {
     console.error("[image] 判定に失敗:", err);
   }
   if (!check.is_purchase_complete) {
-    return send(event, [
-      text(
-        "画像ありがとうございます🌙\n\n個別鑑定をお申込みいただいた方は、BASEの「注文完了」画面のスクリーンショットを送ってくださいね。\n\nご相談はぜひ文字で送ってください。",
-      ),
-    ]);
+    return consult("（画像が送られてきました。個別鑑定の購入完了画面ではないようです）");
   }
 
   const caseNo = startHumanMode(convoId);
-  await send(event, toLineMessages(purchaseThanksMessage()));
+  cancelConsult(convoId);
+  queueSend({
+    convoId,
+    userId: event.source.userId,
+    replyToken: event.replyToken,
+    messages: toLineMessages(purchaseThanksMessage()),
+    minMinutes: config.delay.purchaseMinMinutes,
+    maxMinutes: config.delay.purchaseMaxMinutes,
+  });
   const displayName = await line
     .getProfile(event.source.userId)
     .then((p) => p.displayName)
@@ -111,6 +115,14 @@ async function handleImage(event, convoId) {
   console.log(`[handoff] 受付番号 ${caseNo} → 有人対応へ`);
   await notifyAdmin(adminNotice({ caseNo, displayName, itemName: check.item_name, id: convoId }));
 }
+
+const NON_TEXT_LABEL = {
+  sticker: "（スタンプが送られてきました）",
+  video: "（動画が送られてきました）",
+  audio: "（音声メッセージが送られてきました）",
+  file: "（ファイルが送られてきました）",
+  location: "（位置情報が送られてきました）",
+};
 
 async function handleEvent(event) {
   const userId = event.source.userId;
@@ -130,40 +142,70 @@ async function handleEvent(event) {
   // 有人対応中は AI は返信しない（運営者が LINE のチャット画面から直接返信する）
   if (isHumanMode(convoId)) return;
 
-  if (event.message.type === "image") return enqueue(convoId, () => handleImage(event, convoId));
+  if (event.message.type === "image") return handleImage(event, convoId);
 
-  if (event.message.type !== "text") {
-    return line.replyMessage({
-      replyToken: event.replyToken,
-      messages: [text("ありがとうございます🌙\nご相談はぜひ文字で送ってくださいね。")],
-    });
-  }
-
-  const userText = event.message.text.trim();
-  if (RESET_WORDS.has(userText.toLowerCase())) {
-    clearHistory(convoId);
-    return line.replyMessage({
-      replyToken: event.replyToken,
-      messages: [text("これまでのお話をリセットしました✨\n新しいご相談をどうぞ。")],
-    });
-  }
-
-  return enqueue(convoId, async () => {
-    if (isHumanMode(convoId)) return;
-    showLoading(event);
-    let reply;
-    try {
-      reply = await replyAsFortuneTeller(convoId, userText);
-    } catch (err) {
-      console.error("[claude] error:", err);
-      reply = { text: FALLBACK_REPLY, offer: false };
+  if (event.message.type === "text") {
+    const userText = event.message.text.trim();
+    if (RESET_WORDS.has(userText.toLowerCase())) {
+      clearHistory(convoId);
+      cancelConsult(convoId);
+      return line.replyMessage({
+        replyToken: event.replyToken,
+        messages: [text("これまでのお話をリセットしました✨\n新しいご相談をどうぞ。")],
+      });
     }
-    const messages = reply.offer
-      ? [...toLineMessages(reply.text, { maxMessages: 4 }), offerCard()]
-      : toLineMessages(reply.text);
-    await send(event, messages);
+  }
+
+  const userText =
+    event.message.type === "text" ? event.message.text.trim() : NON_TEXT_LABEL[event.message.type] ?? "（メッセージが送られてきました）";
+  const dueAt = queueConsult({
+    convoId,
+    userId,
+    sourceType: event.source.type,
+    text: userText,
+    replyToken: event.replyToken,
+    markAsReadToken: event.message.markAsReadToken,
   });
+  console.log(`[queue] ${convoId.slice(0, 8)}… 返信予定 ${new Date(dueAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}`);
 }
+
+// 予約した相談に返信する（予約時刻に呼ばれる）
+async function replyToConsult(job) {
+  if (isHumanMode(job.convoId)) return;
+  const to = job.sourceType === "user" ? job.userId : job.convoId;
+  showLoading(job.sourceType, job.userId);
+  let reply;
+  try {
+    reply = await replyAsFortuneTeller(job.convoId, job.items.map((i) => i.text).join("\n"), {
+      waitedMinutes: Math.round((Date.now() - job.receivedAt) / 60_000),
+      messageCount: job.items.length,
+    });
+  } catch (err) {
+    console.error("[claude] error:", err);
+    reply = { text: FALLBACK_REPLY, offer: false };
+  }
+  if (isHumanMode(job.convoId)) return; // 考えている間に購入スクショが届いた場合
+  const messages = reply.offer
+    ? [...toLineMessages(reply.text, { maxMessages: 4 }), offerCard()]
+    : toLineMessages(reply.text);
+  const via = await sendTo({ replyToken: job.replyToken, to }, messages);
+  console.log(`[send] ${job.convoId.slice(0, 8)}… ${messages.length}吹き出し (${via})`);
+}
+
+startScheduler({
+  markRead: (tokens) => {
+    for (const markAsReadToken of tokens) {
+      line.markMessagesAsReadByToken({ markAsReadToken }).catch((err) => {
+        console.warn("[line] 既読をつけられませんでした:", err.status ?? err.message);
+      });
+    }
+  },
+  onConsult: replyToConsult,
+  onSend: async (job) => {
+    const via = await sendTo({ replyToken: job.replyToken, to: job.userId }, job.messages);
+    console.log(`[send] ${job.convoId.slice(0, 8)}… お礼メッセージ (${via})`);
+  },
+});
 
 const app = express();
 
@@ -188,4 +230,6 @@ app.listen(config.port, () => {
   console.log(`model=${config.claude.model} effort=${config.claude.effort}`);
   console.log(`占術: ${fortuneInfo.methods.join(", ") || "（指定なし）"}  道具: ${fortuneInfo.tools.join(", ") || "なし"}`);
   console.log(`有料鑑定の案内: ${fortuneInfo.offer ? "オン" : "オフ"}  運営者通知: ${config.adminUserId ? "オン" : "オフ（ADMIN_USER_ID 未設定）"}`);
+  const d = config.delay;
+  console.log(`返信までの時間: ${d.minMinutes}〜${d.maxMinutes}分（待ち1件ごとに+${d.perPendingMinutes}分）  深夜休み: ${d.quietHours ? `${d.quietHours.start}時〜${d.quietHours.end}時` : "なし"}`);
 });

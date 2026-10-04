@@ -48,6 +48,17 @@ function stamp(date = new Date()) {
   return `[受信日時: ${s} 日本時間]`;
 }
 
+// 返信までの時間（「お待たせしました」などを自然に入れる材料）
+function timingLine(waitedMinutes, messageCount) {
+  if (!waitedMinutes && messageCount <= 1) return "";
+  const parts = [];
+  if (waitedMinutes) {
+    parts.push(waitedMinutes >= 60 ? `最初のメッセージから約${Math.round(waitedMinutes / 60)}時間後に返信` : `最初のメッセージから約${waitedMinutes}分後に返信`);
+  }
+  if (messageCount > 1) parts.push(`返信までに相談者から${messageCount}通`);
+  return `[返信のタイミング: ${parts.join(" / ")}]`;
+}
+
 // フォールバックが途中で起きた場合、境界より前の thinking / tool_use は送り返さない
 function echoable(content) {
   const boundary = content.findLastIndex((b) => b.type === "fallback");
@@ -86,11 +97,11 @@ function handleOfferRequest(userId, input, state) {
  * { text, offer } … offer が true なら返信のあとに案内カードを出す
  * 会話履歴・相談回数の記録もここで行う。
  */
-export async function replyAsFortuneTeller(userId, userText) {
+export async function replyAsFortuneTeller(userId, userText, { waitedMinutes = 0, messageCount = 1 } = {}) {
   noteCrisisSignals(userId, userText);
   countUserTurn(userId);
-  const context = offerContextLine(userId);
-  const userContent = `${stamp()}\n${context ? `${context}\n` : ""}${userText}`;
+  const lines = [stamp(), timingLine(waitedMinutes, messageCount), offerContextLine(userId)].filter(Boolean);
+  const userContent = `${lines.join("\n")}\n${userText}`;
   const state = { offer: false };
   const messages = [...getHistory(userId), { role: "user", content: userContent }];
 

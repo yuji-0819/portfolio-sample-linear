@@ -6,11 +6,13 @@ import { config } from "./config.js";
 
 const file = path.join(config.dataDir, "clients.json");
 let clients = {};
+let jobs = {}; // 返信の予約（相談者ごとに1件）
 let meta = { lastCaseNo: 1000 };
 
 try {
   const saved = JSON.parse(fs.readFileSync(file, "utf8"));
   clients = saved.clients ?? {};
+  jobs = saved.jobs ?? {};
   meta = { ...meta, ...saved.meta };
 } catch (err) {
   if (err.code !== "ENOENT") console.error(`[store] ${file} を読めませんでした:`, err.message);
@@ -22,7 +24,7 @@ function save() {
   timer = setTimeout(() => {
     fs.mkdirSync(config.dataDir, { recursive: true });
     const tmp = `${file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ meta, clients }));
+    fs.writeFileSync(tmp, JSON.stringify({ meta, clients, jobs }));
     fs.renameSync(tmp, file);
   }, 200);
 }
@@ -66,13 +68,24 @@ export function listHuman() {
     .map(([id, c]) => ({ id, ...c }));
 }
 
+export const getJob = (id) => jobs[id] ?? null;
+export const allJobs = () => Object.values(jobs);
+export function setJob(id, job) {
+  jobs[id] = job;
+  save();
+}
+export function deleteJob(id) {
+  delete jobs[id];
+  save();
+}
+
 // 終了時に書きかけを確実に保存
 for (const sig of ["SIGINT", "SIGTERM"]) {
   process.once(sig, () => {
     if (timer) {
       clearTimeout(timer);
       fs.mkdirSync(config.dataDir, { recursive: true });
-      fs.writeFileSync(file, JSON.stringify({ meta, clients }));
+      fs.writeFileSync(file, JSON.stringify({ meta, clients, jobs }));
     }
     process.exit(0);
   });
