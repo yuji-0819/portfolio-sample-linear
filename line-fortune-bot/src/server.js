@@ -1,13 +1,14 @@
-// 公式LINE の Webhook を受けて、占い師として自動返信するサーバー
+// 公式LINE の Webhook を受けて、設定したキャラクターとして自動返信するサーバー
 import express from "express";
 import { messagingApi, middleware, HTTPFetchError } from "@line/bot-sdk";
 import { config } from "./config.js";
-import { FALLBACK_REPLY, fortuneInfo, replyAsFortuneTeller } from "./fortune.js";
+import { botInfo, errorReply, replyAsFortuneTeller } from "./fortune.js";
 import { clearHistory } from "./history.js";
 import { cancelConsult, queueConsult, queueSend, startScheduler } from "./scheduler.js";
-import { loadWelcomeMessage } from "./prompt.js";
+import { getSettings, offerActive } from "./settings.js";
+import { adminRouter } from "./admin/router.js";
 import { toLineMessages } from "./line.js";
-import { offerCard, offerEnabled } from "./offer.js";
+import { offerCard } from "./offer.js";
 import {
   adminNotice,
   handleAdminCommand,
@@ -25,7 +26,6 @@ if (!config.line.channelSecret || !config.line.channelAccessToken) {
 
 const line = new messagingApi.MessagingApiClient({ channelAccessToken: config.line.channelAccessToken });
 const blob = new messagingApi.MessagingApiBlobClient({ channelAccessToken: config.line.channelAccessToken });
-const welcome = loadWelcomeMessage();
 const RESET_WORDS = new Set(["リセット", "りせっと", "reset"]);
 const text = (t) => ({ type: "text", text: t });
 
@@ -85,7 +85,7 @@ async function handleImage(event, convoId) {
       markAsReadToken: event.message.markAsReadToken,
     });
 
-  if (!offerEnabled || event.source.type !== "user") return consult("（画像が送られてきました）");
+  if (!offerActive() || event.source.type !== "user") return consult("（画像が送られてきました）");
 
   let check = { is_purchase_complete: false, item_name: "" };
   try {
@@ -95,7 +95,7 @@ async function handleImage(event, convoId) {
     console.error("[image] 判定に失敗:", err);
   }
   if (!check.is_purchase_complete) {
-    return consult("（画像が送られてきました。個別鑑定の購入完了画面ではないようです）");
+    return consult("（画像が送られてきました。有料サービスの購入完了画面ではないようです）");
   }
 
   const caseNo = startHumanMode(convoId);
@@ -105,8 +105,6 @@ async function handleImage(event, convoId) {
     userId: event.source.userId,
     replyToken: event.replyToken,
     messages: toLineMessages(purchaseThanksMessage()),
-    minMinutes: config.delay.purchaseMinMinutes,
-    maxMinutes: config.delay.purchaseMaxMinutes,
   });
   const displayName = await line
     .getProfile(event.source.userId)
@@ -129,7 +127,7 @@ async function handleEvent(event) {
   const convoId = event.source.groupId ?? event.source.roomId ?? userId;
 
   if (event.type === "follow") {
-    return line.replyMessage({ replyToken: event.replyToken, messages: [text(welcome)] });
+    return line.replyMessage({ replyToken: event.replyToken, messages: toLineMessages(getSettings().messages.welcome) });
   }
   if (event.type !== "message" || !convoId) return;
 
@@ -151,7 +149,7 @@ async function handleEvent(event) {
       cancelConsult(convoId);
       return line.replyMessage({
         replyToken: event.replyToken,
-        messages: [text("これまでのお話をリセットしました✨\n新しいご相談をどうぞ。")],
+        messages: toLineMessages(getSettings().messages.reset),
       });
     }
   }
@@ -182,7 +180,7 @@ async function replyToConsult(job) {
     });
   } catch (err) {
     console.error("[claude] error:", err);
-    reply = { text: FALLBACK_REPLY, offer: false };
+    reply = { text: errorReply(), offer: false };
   }
   if (isHumanMode(job.convoId)) return; // 考えている間に購入スクショが届いた場合
   const messages = reply.offer
@@ -209,7 +207,10 @@ startScheduler({
 
 const app = express();
 
-app.get("/", (_req, res) => res.send("LINE fortune bot is running"));
+app.get("/", (_req, res) => res.send("LINE bot is running"));
+
+// 管理画面（設定の編集・テスト会話）
+app.use("/admin", adminRouter());
 
 // 署名検証は middleware が行う。express.json() より前に置くこと
 app.post("/webhook", middleware({ channelSecret: config.line.channelSecret }), (req, res) => {
@@ -226,10 +227,11 @@ app.use((err, _req, res, _next) => {
 });
 
 app.listen(config.port, () => {
-  console.log(`listening on :${config.port}  (webhook: POST /webhook)`);
-  console.log(`model=${config.claude.model} effort=${config.claude.effort}`);
-  console.log(`占術: ${fortuneInfo.methods.join(", ") || "（指定なし）"}  道具: ${fortuneInfo.tools.join(", ") || "なし"}`);
-  console.log(`有料鑑定の案内: ${fortuneInfo.offer ? "オン" : "オフ"}  運営者通知: ${config.adminUserId ? "オン" : "オフ（ADMIN_USER_ID 未設定）"}`);
-  const d = config.delay;
-  console.log(`返信までの時間: ${d.minMinutes}〜${d.maxMinutes}分（待ち1件ごとに+${d.perPendingMinutes}分）  深夜休み: ${d.quietHours ? `${d.quietHours.start}時〜${d.quietHours.end}時` : "なし"}`);
+  const info = botInfo();
+  const t = getSettings().timing;
+  console.log(`listening on :${config.port}  (webhook: POST /webhook, 管理画面: /admin)`);
+  console.log(`アカウント: ${info.name || "（未設定）"}  model=${config.claude.model} effort=${getSettings().account.effort}`);
+  console.log(`メニュー: ${info.methods.join(", ") || "（指定なし）"}  道具: ${info.tools.join(", ") || "なし"}`);
+  console.log(`有料サービスの案内: ${info.offer ? "オン" : "オフ"}  運営者通知: ${config.adminUserId ? "オン" : "オフ（ADMIN_USER_ID 未設定）"}  管理画面: ${config.adminPassword ? "オン" : "オフ（ADMIN_PASSWORD 未設定）"}`);
+  console.log(`返信までの時間: ${t.minMinutes}〜${t.maxMinutes}分（待ち1件ごとに+${t.perPendingMinutes}分）  深夜休み: ${t.quietEnabled ? `${t.quietStart}時〜${t.quietEnd}時` : "なし"}`);
 });

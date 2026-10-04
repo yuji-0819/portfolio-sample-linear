@@ -1,4 +1,5 @@
 ---
+enabled: false
 name: タロット占い
 tools: draw_tarot
 ---

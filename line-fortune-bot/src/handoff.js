@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import * as z from "zod";
 import { config } from "./config.js";
-import { offer } from "./offer.js";
+import { getSettings } from "./settings.js";
 import { findByCaseNo, getClient, listHuman, nextCaseNo, updateClient } from "./store.js";
 
 const client = new Anthropic();
@@ -13,8 +13,9 @@ const ScreenshotCheck = z.object({
   item_name: z.string(),
 });
 
-/** 画像が BASE の購入完了画面（注文完了・注文確認メールなど）に見えるかを判定する */
+/** 画像が購入完了画面（注文完了・注文確認メールなど）に見えるかを判定する */
 export async function looksLikePurchaseScreenshot(imageBuffer, mediaType) {
+  const offer = getSettings().offer;
   const response = await client.beta.messages.parse({
     model: config.claude.model,
     max_tokens: 2000,
@@ -28,8 +29,8 @@ export async function looksLikePurchaseScreenshot(imageBuffer, mediaType) {
           { type: "image", source: { type: "base64", media_type: mediaType, data: imageBuffer.toString("base64") } },
           {
             type: "text",
-            text: `この画像は、ネットショップ BASE での購入（注文）が完了したことを示す画面またはメールのスクリーンショットですか？
-対象商品: ${offer?.name ?? "個別鑑定"}
+            text: `この画像は、ネットショップ「${offer.shop}」での購入（注文）が完了したことを示す画面またはメールのスクリーンショットですか？
+対象商品: ${offer.name}
 is_purchase_complete: 注文完了画面・注文確認メールなど購入が済んだことが読み取れれば true。カート画面や商品ページ、無関係な画像は false。
 item_name: 画像から読み取れる商品名（読めなければ空文字）`,
           },
@@ -58,7 +59,7 @@ export function isHumanMode(id) {
 }
 
 export function purchaseThanksMessage() {
-  return offer?.thanks || "お申込みありがとうございます。占い師本人から順番にお返事しますので、少しお待ちください。";
+  return getSettings().offer.thanks || "お申込みありがとうございます。順番にお返事しますので、少しお待ちください。";
 }
 
 /** 運営者への通知文 */
@@ -69,7 +70,7 @@ export function adminNotice({ caseNo, displayName, itemName, id }) {
     .map((m) => `・${String(m.content).replace(/^\[.*\]\n/gm, "").slice(0, 80)}`)
     .join("\n");
   return [
-    `【チャット鑑定 申込】受付番号 ${caseNo}`,
+    `【${getSettings().offer.name} 申込】受付番号 ${caseNo}`,
     `お名前: ${displayName}`,
     itemName ? `画像の商品名: ${itemName}` : null,
     "",
@@ -77,7 +78,7 @@ export function adminNotice({ caseNo, displayName, itemName, id }) {
     recent || "（履歴なし）",
     "",
     "▼ 対応のしかた",
-    "1. BASE の管理画面で注文が入っているか確認",
+    `1. ${getSettings().offer.shop} の管理画面で注文が入っているか確認`,
     "2. LINE公式アカウントのチャット画面から、この方に直接返信",
     `3. 鑑定が終わったら、このトークに「#終了 ${caseNo}」と送るとAIの自動返信に戻ります`,
     "（有人対応中は、この方へのAIの返信は止まっています）",

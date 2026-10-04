@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LINE自動返信 設定</title>
+<style>
+/* 左にメニュー、右に編集フォーム。スマホでは上にタブが横スクロールで並ぶ */
+:root {
+  --bg: #f5f4f8; --surface: #ffffff; --fg: #24212f; --muted: #6c6880; --line: #dedbe8;
+  --accent: #5b47a8; --accent-fg: #ffffff; --accent-soft: #eeeaf9; --ok: #2d7d4a; --ok-soft: #e5f3ea;
+  --ng: #b9412f; --ng-soft: #fbece8; --chat: #9bb3d6; --me: #9be28a; --me-fg: #1d2a17; --them: #ffffff;
+  --font: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Noto Sans JP", "Meiryo", sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15131b; --surface: #1f1c28; --fg: #ebe8f4; --muted: #a29db6; --line: #35304a;
+    --accent: #a996f0; --accent-fg: #15131b; --accent-soft: #2b2541; --ok: #73d095; --ok-soft: #1c3226;
+    --ng: #f08a78; --ng-soft: #3a2420; --chat: #26324a; --me: #4f8a43; --me-fg: #f1fbee; --them: #343046;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 15px; line-height: 1.65; }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: var(--accent); }
+
+.app { display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: 100vh; }
+nav { background: var(--surface); border-right: 1px solid var(--line); padding: 20px 12px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+nav h1 { font-size: 15px; margin: 0 8px 4px; }
+nav .acct { font-size: 12px; color: var(--muted); margin: 0 8px 16px; }
+nav button { display: block; width: 100%; text-align: left; border: 0; background: transparent; padding: 9px 12px; border-radius: 8px; cursor: pointer; color: var(--muted); }
+nav button[aria-current="page"] { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+nav button:hover { color: var(--fg); }
+main { padding: 28px 32px 120px; max-width: 920px; width: 100%; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  nav { position: sticky; top: 0; z-index: 5; height: auto; display: flex; gap: 4px; overflow-x: auto; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--line); }
+  nav h1, nav .acct { display: none; }
+  nav button { white-space: nowrap; width: auto; flex: none; }
+  main { padding: 20px 16px 120px; }
+}
+
+section[data-tab] { display: none; flex-direction: column; gap: 18px; }
+section[data-tab].on { display: flex; }
+h2 { font-size: 22px; margin: 0; }
+.lead { color: var(--muted); margin: -10px 0 0; max-width: 68ch; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.card h3 { margin: 0; font-size: 16px; }
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.field > label, .field > .label { font-weight: 700; font-size: 14px; }
+.hint { font-size: 13px; color: var(--muted); margin: 0; }
+input[type=text], input[type=url], input[type=number], select, textarea {
+  width: 100%; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: 9px 12px;
+}
+textarea { min-height: 120px; resize: vertical; line-height: 1.6; }
+textarea.tall { min-height: 360px; }
+textarea.code { font-family: var(--mono); font-size: 13px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+.switch { display: flex; align-items: center; gap: 10px; font-weight: 700; cursor: pointer; }
+.switch input { width: 20px; height: 20px; accent-color: var(--accent); }
+.checks { display: flex; flex-wrap: wrap; gap: 14px; }
+.checks label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+
+.btn { border: 1px solid var(--line); background: var(--surface); padding: 8px 16px; border-radius: 999px; cursor: pointer; white-space: nowrap; flex: none; text-decoration: none; color: var(--fg); }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 700; }
+.btn.danger { color: var(--ng); }
+.btn:disabled { opacity: .5; cursor: default; }
+.btns { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+.pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.ng { background: var(--ng-soft); color: var(--ng); }
+
+.method { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; background: var(--bg); }
+.method-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.method-head input[type=text] { flex: 1; min-width: 160px; font-weight: 700; background: var(--surface); }
+.method textarea { background: var(--surface); }
+details > summary { cursor: pointer; font-weight: 700; color: var(--muted); }
+details[open] > summary { margin-bottom: 12px; }
+
+.savebar { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--surface); border-top: 1px solid var(--line); display: flex; gap: 12px; align-items: center; justify-content: flex-end; z-index: 10; }
+.savebar .msg { margin-right: auto; color: var(--muted); font-size: 14px; }
+.savebar .msg.dirty { color: var(--accent); font-weight: 700; }
+@media (min-width: 761px) { .savebar { left: 230px; } }
+@media (max-width: 480px) { .savebar { gap: 8px; } .savebar .msg { font-size: 12px; } .savebar #discard { display: none; } }
+
+/* LINE風プレビュー */
+.phone { background: var(--chat); border-radius: 16px; padding: 14px 12px; display: flex; flex-direction: column; gap: 8px; min-height: 160px; max-height: 560px; overflow-y: auto; }
+.b { max-width: 82%; padding: 8px 12px; border-radius: 16px; white-space: pre-wrap; word-break: break-word; font-size: 14px; }
+.b.them { background: var(--them); align-self: flex-start; border-top-left-radius: 4px; }
+.b.me { background: var(--me); color: var(--me-fg); align-self: flex-end; border-top-right-radius: 4px; }
+.sys { align-self: center; font-size: 12px; color: var(--fg); opacity: .75; text-align: center; max-width: 92%; }
+.flex-card { align-self: flex-start; width: 250px; max-width: 82%; background: var(--them); border-radius: 14px; overflow: hidden; }
+.flex-card img { display: block; width: 100%; aspect-ratio: 20 / 13; object-fit: cover; }
+.flex-card .in { padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
+.flex-card .lb { font-size: 12px; font-weight: 700; }
+.flex-card .nm { font-size: 16px; font-weight: 700; }
+.flex-card .pr { font-size: 13px; color: var(--muted); }
+.flex-card .nt { font-size: 11px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
+.flex-card .bt { margin: 0 12px 12px; color: #fff; text-align: center; padding: 8px; border-radius: 8px; font-weight: 700; font-size: 14px; }
+.events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.events li::before { content: "› "; color: var(--accent); }
+.chat-input { display: flex; gap: 8px; }
+.chat-input textarea { min-height: 46px; height: 46px; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 300px); gap: 18px; align-items: start; }
+@media (max-width: 900px) { .two { grid-template-columns: minmax(0, 1fr); } }
+.stat { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat div { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.stat span { display: block; font-size: 12px; color: var(--muted); }
+.stat b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); background: var(--fg); color: var(--bg); padding: 10px 18px; border-radius: 999px; font-size: 14px; z-index: 20; }
+.confirm { border: 1px solid var(--ng); background: var(--ng-soft); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+code { font-family: var(--mono); font-size: 13px; background: var(--accent-soft); padding: 1px 6px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav aria-label="設定メニュー">
+    <h1>LINE自動返信 設定</h1>
+    <p class="acct" id="nav-acct"></p>
+    <button data-go="basic" aria-current="page">基本</button>
+    <button data-go="persona">キャラ設定</button>
+    <button data-go="methods">メニュー</button>
+    <button data-go="offer">有料サービスと誘導</button>
+    <button data-go="messages">定型文</button>
+    <button data-go="timing">返信タイミング</button>
+    <button data-go="rules">ルール</button>
+    <button data-go="test">テスト会話</button>
+    <button data-go="status">状況・バックアップ</button>
+  </nav>
+
+  <main>
+    <!-- 基本 -->
+    <section data-tab="basic" class="on">
+      <h2>基本</h2>
+      <p class="lead">アカウントの名前と役割です。ここを変えれば、占い師以外のアカウント（コーチ、サロン、講師など）にも使えます。</p>
+      <div class="card">
+        <div class="field">
+          <label for="f-name">キャラクター名・アカウント名</label>
+          <input type="text" id="f-name" data-k="account.name" placeholder="例: 月詠（つくよみ）">
+        </div>
+        <div class="field">
+          <label for="f-role">役割（AI に「あなたは〇〇です」と伝える一文）</label>
+          <input type="text" id="f-role" data-k="account.role" placeholder="例: 公式LINEアカウントで相談者とやり取りする占い師">
+          <p class="hint">「あなたは<b>この文</b>です。」の形で AI に渡されます。</p>
+        </div>
+        <div class="field">
+          <label for="f-effort">返信の丁寧さ</label>
+          <select id="f-effort" data-k="account.effort">
+            <option value="low">さっと（速い・安い）</option>
+            <option value="medium">ふつう（おすすめ）</option>
+            <option value="high">じっくり（丁寧・遅い・高い）</option>
+          </select>
+          <p class="hint">AI がどれだけ考えてから返すかです。返信はもともと時間をあけて送るので、「じっくり」でも相談者の待ち時間は変わりません（費用は上がります）。</p>
+        </div>
+      </div>
+      <div class="card">
+        <h3>今の設定の元になったテンプレート</h3>
+        <p class="hint" id="tpl-current"></p>
+        <p class="hint">別のテンプレートから作り直したいときは「状況・バックアップ」から行えます。</p>
+      </div>
+    </section>
+
+    <!-- キャラ設定 -->
+    <section data-tab="persona">
+      <h2>キャラ設定</h2>
+      <p class="lead">人物像・口調・返信の型・言い回しの例など、AI がなりきるための設定です。具体的に書くほど、返信があなたらしくなります。</p>
+      <div class="card">
+        <div class="field">
+          <label for="f-persona">キャラクター設定</label>
+          <textarea id="f-persona" class="tall" data-k="persona"></textarea>
+          <p class="hint">見出し（## など）は自由に使えます。あなたがふだん使う言い回しや決め台詞を「例:」として書いておくと、よく似た言い回しで返すようになります。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- メニュー -->
+    <section data-tab="methods">
+      <h2>メニュー</h2>
+      <p class="lead">AI が使う「術」や「得意分野」です。1つずつ、どんなときに使うか・必要な情報・手順・伝え方を書きます。オンにしたものだけが使われます。</p>
+      <div class="card">
+        <div class="field">
+          <label for="f-mtitle">このアカウントでの呼び方</label>
+          <input type="text" id="f-mtitle" data-k="methodsTitle" placeholder="例: 占術 / 得意分野 / メニュー">
+        </div>
+      </div>
+      <div id="methods" style="display:flex;flex-direction:column;gap:12px"></div>
+      <div class="btns"><button class="btn" id="add-method">＋ メニューを追加</button></div>
+      <div class="card">
+        <details>
+          <summary>くわしい設定（メニュー全体への指示）</summary>
+          <div class="field">
+            <label for="f-mintro">メニューがあるときの前置き</label>
+            <textarea id="f-mintro" data-k="methodsIntro"></textarea>
+          </div>
+          <div class="field">
+            <label for="f-mempty">メニューが1つもオンでないときの指示</label>
+            <textarea id="f-mempty" data-k="methodsEmpty"></textarea>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <!-- 有料サービス -->
+    <section data-tab="offer">
+      <h2>有料サービスと誘導</h2>
+      <p class="lead">相談者の気持ちが「もっと知りたい」に変わったとき、案内カードで有料サービスへ誘導します。申込みページの URL を入れると有効になります。</p>
+      <div class="card">
+        <div class="btns"><label class="switch"><input type="checkbox" data-k="offer.enabled"> 有料サービスの案内を使う</label><span id="offer-state" class="pill"></span></div>
+        <div class="row">
+          <div class="field"><label for="f-oname">サービス名</label><input type="text" id="f-oname" data-k="offer.name"></div>
+          <div class="field"><label for="f-oprice">価格の表示</label><input type="text" id="f-oprice" data-k="offer.price" placeholder="例: 3,000円（税込）"></div>
+          <div class="field"><label for="f-oshop">販売するお店・サービス</label><input type="text" id="f-oshop" data-k="offer.shop" placeholder="例: BASE / STORES"></div>
+        </div>
+        <div class="field">
+          <label for="f-ourl">申込みページの URL</label>
+          <input type="url" id="f-ourl" data-k="offer.url" placeholder="https://xxxx.thebase.in/items/12345678">
+          <p class="hint">https:// から始まる URL を入れると、案内が有効になります。</p>
+        </div>
+        <div class="field">
+          <label for="f-odesc">サービスの内容</label>
+          <textarea id="f-odesc" data-k="offer.description"></textarea>
+          <p class="hint">AI が案内するときの説明の材料になります。</p>
+        </div>
+        <div class="field">
+          <label for="f-osteps">申込みの流れ</label>
+          <textarea id="f-osteps" data-k="offer.steps"></textarea>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>案内カード</h3>
+        <div class="two">
+          <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+            <div class="row">
+              <div class="field"><label for="f-olabel">上の小見出し</label><input type="text" id="f-olabel" data-k="offer.cardLabel"></div>
+              <div class="field"><label for="f-obtn">ボタンの文字（20文字まで）</label><input type="text" id="f-obtn" data-k="offer.buttonLabel" maxlength="20"></div>
+              <div class="field"><label for="f-ocolor">色</label><input type="text" id="f-ocolor" data-k="offer.color" placeholder="#8E7CC3"></div>
+            </div>
+            <div class="field"><label for="f-onote">注意書き</label><textarea id="f-onote" data-k="offer.cardNote" style="min-height:70px"></textarea></div>
+            <div class="field"><label for="f-oimg">画像の URL（任意）</label><input type="url" id="f-oimg" data-k="offer.imageUrl" placeholder="https://…（横長の画像）"></div>
+          </div>
+          <div class="field"><span class="label">プレビュー</span><div class="phone" id="card-preview"></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>案内を出す条件</h3>
+        <label class="switch"><input type="checkbox" data-k="offerRules.requireConfirmation"> 案内の前に意思確認をする（おすすめ）</label>
+        <p class="hint">オンにすると「ズバッと言い切る → 本人に『どうしたいか』を聞く → YES のときだけ案内カード」の順番になります。プログラムで強制されます。本人から希望したときは意思確認なしで案内します。</p>
+        <div class="row">
+          <div class="field"><label for="f-rturns">何回相談を受けたら案内してよいか</label><input type="number" id="f-rturns" min="0" max="100" data-k="offerRules.minTurns"></div>
+          <div class="field"><label for="f-rcool">一度案内したら次まで空ける日数</label><input type="number" id="f-rcool" min="0" max="365" data-k="offerRules.cooldownDays"></div>
+          <div class="field"><label for="f-rcrisis">命に関わる言葉が出たら案内を止める日数</label><input type="number" id="f-rcrisis" min="0" max="365" data-k="offerRules.crisisBlockDays"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="field">
+          <label for="f-oguide">誘導の手順（AI への指示）</label>
+          <textarea id="f-oguide" class="tall" data-k="offer.guide"></textarea>
+          <p class="hint">心の段階ごとの動き、フック・意思確認・案内の言い回しの例です。<code>{商品名}</code> <code>{価格}</code> は自動で置き換わります。例文をあなたの決め台詞に差し替えると効果的です。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="field">
+          <label for="f-othanks">購入スクショを受け取ったときの返信</label>
+          <textarea id="f-othanks" data-k="offer.thanks"></textarea>
+          <p class="hint">「---」だけの行で吹き出しを分けられます。このあと、その方への AI の返信は止まり、あなたの LINE に通知が届きます。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 定型文 -->
+    <section data-tab="messages">
+      <h2>定型文</h2>
+      <p class="lead">決まった場面で送る文章です。「---」だけの行で吹き出しを分けられます。</p>
+      <div class="card">
+        <div class="field"><label for="f-welcome">友だち追加のあいさつ（すぐに届きます）</label><textarea id="f-welcome" data-k="messages.welcome" style="min-height:200px"></textarea></div>
+        <div class="field"><label for="f-reset">「リセット」と送られたときの返信</label><textarea id="f-reset" data-k="messages.reset" style="min-height:80px"></textarea></div>
+        <div class="field"><label for="f-error">うまく返信を作れなかったときの返信</label><textarea id="f-error" data-k="messages.error" style="min-height:80px"></textarea></div>
+        <div class="field"><label for="f-refusal">AI が答えられない相談だったときの返信</label><textarea id="f-refusal" data-k="messages.refusal" style="min-height:80px"></textarea></div>
+      </div>
+    </section>
+
+    <!-- 返信タイミング -->
+    <section data-tab="timing">
+      <h2>返信タイミング</h2>
+      <p class="lead">すぐには返さず、時間をあけて「既読 → 入力中 → 返信」の順で返します。命に関わる言葉があるときだけは、設定にかかわらず1分以内に返します。</p>
+      <div class="card">
+        <div class="row">
+          <div class="field"><label for="f-tmin">返信までの最短（分）</label><input type="number" id="f-tmin" min="0" max="1440" step="0.5" data-k="timing.minMinutes"></div>
+          <div class="field"><label for="f-tmax">返信までの最長（分）</label><input type="number" id="f-tmax" min="0" max="1440" step="0.5" data-k="timing.maxMinutes"></div>
+          <div class="field"><label for="f-tpend">返信待ち1件ごとに足す（分）</label><input type="number" id="f-tpend" min="0" max="120" step="0.5" data-k="timing.perPendingMinutes"></div>
+        </div>
+        <p class="hint">この範囲でランダムに決まり、短めが多く、ときどき長めになります。混んでいるほど遅くなります。0 にするとすぐ返します。</p>
+      </div>
+      <div class="card">
+        <label class="switch"><input type="checkbox" data-k="timing.quietEnabled"> 深夜は返信しない</label>
+        <div class="row">
+          <div class="field"><label for="f-qs">何時から（日本時間）</label><input type="number" id="f-qs" min="0" max="23" data-k="timing.quietStart"></div>
+          <div class="field"><label for="f-qe">何時まで</label><input type="number" id="f-qe" min="0" max="23" data-k="timing.quietEnd"></div>
+        </div>
+        <p class="hint">この時間帯に届いた相談は、明けてから 0〜60 分のあいだに返します。</p>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div class="field"><label for="f-pmin">購入スクショへのお礼まで 最短（分）</label><input type="number" id="f-pmin" min="0" max="120" step="0.5" data-k="timing.purchaseMinMinutes"></div>
+          <div class="field"><label for="f-pmax">最長（分）</label><input type="number" id="f-pmax" min="0" max="120" step="0.5" data-k="timing.purchaseMaxMinutes"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>料金について</h3>
+        <p class="hint">時間をあけて返すと、LINE の無料の返信（リプライ）の期限が切れることが多く、その場合はプッシュメッセージとして月間メッセージ数にカウントされます。相談が多い場合は、公式アカウントの料金プランを確認してください。</p>
+      </div>
+    </section>
+
+    <!-- ルール -->
+    <section data-tab="rules">
+      <h2>ルール</h2>
+      <p class="lead">安全と信頼のために守らせるルールです。命に関わる相談への対応や、不安をあおらないことなどが入っています。消さずに、必要なものを書き足してください。</p>
+      <div class="card">
+        <div class="field"><label for="f-rules">ルール</label><textarea id="f-rules" class="tall" data-k="rules"></textarea></div>
+      </div>
+    </section>
+
+    <!-- テスト会話 -->
+    <section data-tab="test">
+      <h2>テスト会話</h2>
+      <p class="lead">保存済みの設定で、相談者になったつもりで試せます。LINE には送られず、待ち時間もありません（AI の利用料はかかります）。</p>
+      <div class="two">
+        <div class="card">
+          <div class="phone" id="test-chat" aria-live="polite"><div class="sys">メッセージを送ると、ここに返信が表示されます</div></div>
+          <div class="chat-input">
+            <textarea id="test-text" placeholder="例: 最近、彼からの連絡が減って不安です"></textarea>
+            <button class="btn primary" id="test-send">送信</button>
+          </div>
+          <div class="btns"><button class="btn" id="test-reset">会話をリセット</button><span class="hint" id="test-note"></span></div>
+        </div>
+        <div class="card">
+          <h3>裏側の判断</h3>
+          <ul class="events" id="test-events"><li>まだありません</li></ul>
+          <p class="hint" id="test-state"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 状況・バックアップ -->
+    <section data-tab="status">
+      <h2>状況・バックアップ</h2>
+      <div class="card">
+        <h3>いまの状況</h3>
+        <div class="stat" id="stat"></div>
+        <div id="human-list"></div>
+        <div class="btns"><button class="btn" id="refresh-status">更新</button></div>
+      </div>
+      <div class="card">
+        <h3>設定のバックアップ・別アカウントへのコピー</h3>
+        <p class="hint">設定をファイルに書き出しておけば、別のアカウント（別のサーバー）で読み込んで同じキャラを使えます。</p>
+        <div class="btns">
+          <a class="btn" href="api/settings/export" download>設定を書き出す</a>
+          <label class="btn">設定ファイルを読み込む<input type="file" id="import-file" accept="application/json,.json" hidden></label>
+        </div>
+        <div id="import-confirm" hidden></div>
+      </div>
+      <div class="card">
+        <h3>テンプレートから作り直す</h3>
+        <p class="hint">今の設定をすべてテンプレートの内容に置き換えます。必要なら先に書き出しておいてください。</p>
+        <div class="field"><label for="tpl-select">テンプレート</label><select id="tpl-select"></select><p class="hint" id="tpl-desc"></p></div>
+        <div class="btns"><button class="btn danger" id="tpl-apply">このテンプレートで作り直す</button></div>
+        <div id="tpl-confirm" hidden></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="savebar">
+  <span class="msg" id="save-msg">読み込み中…</span>
+  <button class="btn" id="discard" disabled>変更を取り消す</button>
+  <button class="btn primary" id="save" disabled>保存する</button>
+</div>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const TOOL_LABELS = { draw_tarot: "タロットを引く", draw_random: "選択肢からランダムに選ぶ" };
+
+let saved = null, draft = null, templates = [], knownTools = [], offerOn = false;
+
+function toast(msg) {
+  const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2400);
+}
+
+async function api(url, opts = {}) {
+  const res = await fetch(url, { headers: { "content-type": "application/json" }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `エラー（${res.status}）`);
+  return data;
+}
+
+const getPath = (o, k) => k.split(".").reduce((x, p) => x?.[p], o);
+function setPath(o, k, v) { const ps = k.split("."); const last = ps.pop(); ps.reduce((x, p) => x[p], o)[last] = v; }
+
+function isDirty() { return JSON.stringify(saved) !== JSON.stringify(draft); }
+function updateSaveBar() {
+  const dirty = isDirty();
+  $("#save").disabled = !dirty; $("#discard").disabled = !dirty;
+  const m = $("#save-msg");
+  m.textContent = dirty ? "保存していない変更があります" : "保存済み（次の返信から反映されます）";
+  m.className = "msg" + (dirty ? " dirty" : "");
+  $("#nav-acct").textContent = draft?.account?.name || "";
+}
+
+function fillFields() {
+  for (const el of $$("[data-k]")) {
+    const v = getPath(draft, el.dataset.k);
+    if (el.type === "checkbox") el.checked = Boolean(v); else el.value = v ?? "";
+  }
+  renderMethods(); renderCardPreview(); renderOfferState();
+  const t = templates.find((x) => x.id === draft.template);
+  $("#tpl-current").textContent = t ? `${t.label}（${t.description}）` : draft.template || "—";
+  updateSaveBar();
+}
+
+document.addEventListener("input", (e) => {
+  const el = e.target.closest("[data-k]");
+  if (!el || !draft) return;
+  let v = el.type === "checkbox" ? el.checked : el.value;
+  if (el.type === "number") v = el.value === "" ? 0 : Number(el.value);
+  setPath(draft, el.dataset.k, v);
+  if (el.dataset.k.startsWith("offer.")) { renderCardPreview(); renderOfferState(); }
+  updateSaveBar();
+});
+
+// メニュー（術）
+function renderMethods() {
+  const box = $("#methods");
+  box.innerHTML = draft.methods.length ? "" : '<div class="card"><p class="hint">まだメニューがありません。「＋ メニューを追加」から作れます。</p></div>';
+  draft.methods.forEach((m, i) => {
+    const el = document.createElement("div");
+    el.className = "method";
+    el.innerHTML = `
+      <div class="method-head">
+        <label class="switch" title="オンのものだけ使われます"><input type="checkbox" data-mi="${i}" data-mf="enabled" ${m.enabled ? "checked" : ""}> 使う</label>
+        <input type="text" data-mi="${i}" data-mf="name" value="${esc(m.name)}" aria-label="メニュー名">
+        <button class="btn danger" data-del="${i}">削除</button>
+      </div>
+      <textarea data-mi="${i}" data-mf="body" style="min-height:200px" aria-label="${esc(m.name)}の内容">${esc(m.body)}</textarea>
+      <div class="checks"><span class="hint">使う道具:</span>${knownTools.map((t) => `<label><input type="checkbox" data-mi="${i}" data-mt="${t}" ${m.tools.includes(t) ? "checked" : ""}> ${TOOL_LABELS[t] ?? t}</label>`).join("")}</div>`;
+    box.appendChild(el);
+  });
+}
+$("#methods").addEventListener("input", (e) => {
+  const el = e.target; const i = Number(el.dataset.mi);
+  if (Number.isNaN(i)) return;
+  const m = draft.methods[i];
+  if (el.dataset.mf) m[el.dataset.mf] = el.type === "checkbox" ? el.checked : el.value;
+  if (el.dataset.mt) m.tools = el.checked ? [...new Set([...m.tools, el.dataset.mt])] : m.tools.filter((t) => t !== el.dataset.mt);
+  updateSaveBar();
+});
+$("#methods").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-del]"); if (!b) return;
+  const i = Number(b.dataset.del);
+  if (b.dataset.sure) { draft.methods.splice(i, 1); renderMethods(); updateSaveBar(); return; }
+  b.dataset.sure = "1"; b.textContent = "本当に削除";
+  setTimeout(() => { if (b.isConnected) { delete b.dataset.sure; b.textContent = "削除"; } }, 3000);
+});
+$("#add-method").addEventListener("click", () => {
+  draft.methods.push({ id: `m${Date.now()}`, name: "新しいメニュー", enabled: true, tools: [],
+    body: "## どんなときに使うか\n\n## 必要な情報\n\n## 手順\n\n## 結果の伝え方\n" });
+  renderMethods(); updateSaveBar();
+  $$("#methods .method").at(-1).scrollIntoView({ behavior: "smooth", block: "center" });
+});
+
+// 案内カードのプレビュー
+function renderCardPreview() {
+  const o = draft.offer;
+  const color = /^#[0-9a-fA-F]{6}$/.test(o.color) ? o.color : "#8E7CC3";
+  $("#card-preview").innerHTML = `<div class="flex-card">
+    ${/^https:\/\//.test(o.imageUrl) ? `<img src="${esc(o.imageUrl)}" alt="">` : ""}
+    <div class="in">${o.cardLabel ? `<span class="lb" style="color:${color}">${esc(o.cardLabel)}</span>` : ""}
+      <span class="nm">${esc(o.name)}</span>${o.price ? `<span class="pr">${esc(o.price)}</span>` : ""}
+      ${o.cardNote ? `<span class="nt">${esc(o.cardNote)}</span>` : ""}</div>
+    <div class="bt" style="background:${color}">${esc(o.buttonLabel)}</div></div>`;
+}
+function renderOfferState() {
+  const on = draft.offer.enabled && /^https:\/\/\S+$/.test(draft.offer.url.trim());
+  const p = $("#offer-state");
+  p.className = "pill " + (on ? "ok" : "ng");
+  p.textContent = on ? "有効" : draft.offer.enabled ? "URL が未設定のため無効" : "オフ";
+}
+
+// 保存
+$("#save").addEventListener("click", async () => {
+  $("#save").disabled = true;
+  try {
+    const r = await api("api/settings", { method: "PUT", body: JSON.stringify({ settings: draft }) });
+    saved = r.settings; draft = structuredClone(saved); offerOn = r.offerActive;
+    fillFields(); toast("保存しました。次の返信から反映されます");
+  } catch (err) { toast(err.message); updateSaveBar(); }
+});
+$("#discard").addEventListener("click", () => { draft = structuredClone(saved); fillFields(); toast("変更を取り消しました"); });
+window.addEventListener("beforeunload", (e) => { if (draft && isDirty()) { e.preventDefault(); e.returnValue = ""; } });
+
+// タブ
+function go(tab) {
+  $$("nav button").forEach((b) => (b.dataset.go === tab ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
+  $$("section[data-tab]").forEach((s) => s.classList.toggle("on", s.dataset.tab === tab));
+  if (tab === "status") loadStatus();
+  if (tab === "test") $("#test-note").textContent = isDirty() ? "※ 保存していない変更は、テスト会話には反映されません" : "";
+  try { localStorage.setItem("admin-tab", tab); } catch {}
+  window.scrollTo(0, 0);
+}
+$$("nav button").forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
+
+// テスト会話
+const session = (() => { try { return localStorage.getItem("admin-test-session") || (localStorage.setItem("admin-test-session", "s" + Date.now()), localStorage.getItem("admin-test-session")); } catch { return "s" + Date.now(); } })();
+function addBubble(cls, text) {
+  const chat = $("#test-chat"); const d = document.createElement("div");
+  d.className = cls; d.textContent = text; chat.appendChild(d); chat.scrollTop = chat.scrollHeight; return d;
+}
+async function sendTest() {
+  const ta = $("#test-text"); const text = ta.value.trim(); if (!text) return;
+  ta.value = ""; addBubble("b me", text);
+  const wait = addBubble("sys", "返信を作っています…");
+  $("#test-send").disabled = true;
+  try {
+    const r = await api("api/test/chat", { method: "POST", body: JSON.stringify({ text, session }) });
+    wait.remove();
+    r.bubbles.forEach((b) => addBubble("b them", b));
+    if (r.offer) { const c = document.createElement("div"); c.innerHTML = $("#card-preview").innerHTML; $("#test-chat").appendChild(c.firstElementChild); }
+    $("#test-events").innerHTML = (r.events.length ? r.events : ["特別な判断はありませんでした"]).map((e) => `<li>${esc(e)}</li>`).join("");
+    $("#test-state").textContent = `相談回数 ${r.state.userTurns}回 / 案内 ${r.state.offers}回${r.state.confirmAsked ? " / 意思確認の質問 済み" : ""}`;
+    $("#test-chat").scrollTop = $("#test-chat").scrollHeight;
+  } catch (err) { wait.textContent = err.message; }
+  $("#test-send").disabled = false; ta.focus();
+}
+$("#test-send").addEventListener("click", sendTest);
+$("#test-text").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendTest(); });
+$("#test-reset").addEventListener("click", async () => {
+  await api("api/test/reset", { method: "POST", body: JSON.stringify({ session }) });
+  $("#test-chat").innerHTML = '<div class="sys">会話をリセットしました</div>';
+  $("#test-events").innerHTML = "<li>まだありません</li>"; $("#test-state").textContent = "";
+});
+
+// 状況
+async function loadStatus() {
+  try {
+    const s = await api("api/status");
+    const next = s.nextReplyAt ? new Date(s.nextReplyAt).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) : "—";
+    $("#stat").innerHTML = `
+      <div><span>相談者の数</span><b>${s.clients}</b></div>
+      <div><span>返信待ちの相談</span><b>${s.waiting}</b></div>
+      <div><span>次の返信予定</span><b>${next}</b></div>
+      <div><span>有料サービスの案内</span><b>${s.bot.offer ? "有効" : "無効"}</b></div>
+      <div><span>申込み通知（ADMIN_USER_ID）</span><b>${s.adminNotify ? "有効" : "未設定"}</b></div>`;
+    $("#human-list").innerHTML = s.human.length
+      ? `<p class="hint">有人対応中（AI は返信していません）</p>` + s.human.map((h) => `<div class="btns"><span>受付番号 <b>${h.caseNo}</b>（${new Date(h.since).toLocaleString("ja-JP")}〜）</span><button class="btn" data-end="${h.caseNo}">対応を終えて AI に戻す</button></div>`).join("")
+      : `<p class="hint">有人対応中の方はいません。</p>`;
+  } catch (err) { $("#stat").textContent = err.message; }
+}
+$("#refresh-status").addEventListener("click", loadStatus);
+$("#human-list").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-end]"); if (!b) return;
+  await api(`api/human/${b.dataset.end}/end`, { method: "POST" }); toast(`受付番号 ${b.dataset.end} を AI 返信に戻しました`); loadStatus();
+});
+
+// 読み込み・テンプレート（確認はページ内で行う）
+function confirmBox(el, text, onYes) {
+  el.hidden = false;
+  el.innerHTML = `<div class="confirm"><span>${esc(text)}</span><div class="btns"><button class="btn danger" data-yes>実行する</button><button class="btn" data-no>やめる</button></div></div>`;
+  $("[data-no]", el).onclick = () => { el.hidden = true; el.innerHTML = ""; };
+  $("[data-yes]", el).onclick = async () => { el.hidden = true; el.innerHTML = ""; await onYes(); };
+}
+$("#import-file").addEventListener("change", async (e) => {
+  const f = e.target.files[0]; e.target.value = ""; if (!f) return;
+  let json; try { json = JSON.parse(await f.text()); } catch { return toast("JSON ファイルを読めませんでした"); }
+  const name = json?.settings?.account?.name ?? json?.account?.name ?? "（名前なし）";
+  confirmBox($("#import-confirm"), `「${name}」の設定で、今の設定をすべて置き換えます。`, async () => {
+    try { const r = await api("api/settings/import", { method: "POST", body: JSON.stringify(json) }); saved = r.settings; draft = structuredClone(saved); fillFields(); toast("設定を読み込みました"); }
+    catch (err) { toast(err.message); }
+  });
+});
+function renderTemplates() {
+  $("#tpl-select").innerHTML = templates.map((t) => `<option value="${esc(t.id)}">${esc(t.label)}</option>`).join("");
+  const show = () => { $("#tpl-desc").textContent = templates.find((t) => t.id === $("#tpl-select").value)?.description ?? ""; };
+  $("#tpl-select").onchange = show; show();
+}
+$("#tpl-apply").addEventListener("click", () => {
+  const id = $("#tpl-select").value; const t = templates.find((x) => x.id === id);
+  confirmBox($("#tpl-confirm"), `今の設定をすべて「${t?.label}」テンプレートの内容に置き換えます。元に戻せません。`, async () => {
+    try { const r = await api("api/settings/template", { method: "POST", body: JSON.stringify({ template: id }) }); saved = r.settings; draft = structuredClone(saved); fillFields(); toast("テンプレートで作り直しました"); }
+    catch (err) { toast(err.message); }
+  });
+});
+
+(async () => {
+  try {
+    const r = await api("api/settings");
+    saved = r.settings; draft = structuredClone(saved); templates = r.templates; knownTools = r.knownTools; offerOn = r.offerActive;
+    renderTemplates(); fillFields();
+    let tab = "basic"; try { tab = localStorage.getItem("admin-tab") || "basic"; } catch {}
+    if ($(`section[data-tab="${tab}"]`)) go(tab);
+  } catch (err) { $("#save-msg").textContent = `読み込めませんでした: ${err.message}`; }
+})();
+</script>
+</body>
+</html>

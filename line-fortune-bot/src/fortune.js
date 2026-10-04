@@ -1,15 +1,15 @@
-// Claude に占い師として返信を作ってもらう
+// Claude にキャラクターとして返信を作ってもらう
 import Anthropic from "@anthropic-ai/sdk";
 import { config } from "./config.js";
-import { buildSystemPrompt, loadMethods } from "./prompt.js";
+import { buildSystemPrompt } from "./prompt.js";
 import { runTool, toolSchemas, toolsFor } from "./tools.js";
 import { appendTurn, getHistory } from "./history.js";
+import { getSettings, offerActive, settingsRevision } from "./settings.js";
 import {
   checkOffer,
   countUserTurn,
   noteCrisisSignals,
   offerContextLine,
-  offerEnabled,
   offerPromptSection,
   offerTool,
   recordOffer,
@@ -17,23 +17,32 @@ import {
 
 const client = new Anthropic();
 
-// 起動時に一度だけ組み立てる（毎回同じ内容にしてプロンプトキャッシュを効かせる）
-const methods = loadMethods();
-const system = buildSystemPrompt(methods, [offerPromptSection()]);
-const tools = [...toolSchemas(toolsFor(methods)), ...(offerEnabled ? [offerTool] : [])];
+// 設定が変わったときだけ指示文を作り直す（同じ内容ならプロンプトキャッシュが効く）
+let built = { revision: -1 };
+function current() {
+  const revision = settingsRevision();
+  if (built.revision !== revision) {
+    const s = getSettings();
+    const methods = s.methods.filter((m) => m.enabled);
+    const tools = [...toolSchemas(toolsFor(methods)), ...(offerActive(s) ? [offerTool] : [])];
+    built = { revision, settings: s, system: buildSystemPrompt(s, [offerPromptSection(s)]), tools };
+  }
+  return built;
+}
 
-export const fortuneInfo = {
-  methods: methods.map((m) => m.name),
-  tools: tools.map((t) => t.name),
-  offer: offerEnabled,
-};
+export function botInfo() {
+  const { settings, tools } = current();
+  return {
+    name: settings.account.name,
+    methods: settings.methods.filter((m) => m.enabled).map((m) => m.name),
+    tools: tools.map((t) => t.name),
+    offer: offerActive(settings),
+  };
+}
+
+export const errorReply = () => getSettings().messages.error;
 
 const MAX_TOOL_ROUNDS = 5;
-
-export const FALLBACK_REPLY =
-  "ごめんなさい、いま星の巡りが少し乱れているようです🌙\n少し時間をおいて、もう一度メッセージを送っていただけますか？";
-const REFUSAL_REPLY =
-  "ごめんなさい、そのご相談はこの場ではお受けすることができません。\nほかに気になっていることがあれば、どうぞ聞かせてくださいね。";
 
 function stamp(date = new Date()) {
   const s = new Intl.DateTimeFormat("ja-JP", {
@@ -68,14 +77,14 @@ function echoable(content) {
   );
 }
 
-async function callClaude(messages) {
+async function callClaude({ system, tools, settings }, messages) {
   return client.beta.messages.create({
     model: config.claude.model,
     max_tokens: 16000,
     system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
     ...(tools.length ? { tools } : {}),
     messages,
-    output_config: { effort: config.claude.effort },
+    output_config: { effort: settings.account.effort },
     // 安全分類器に止められた場合、サーバー側で別モデルに自動で引き継ぐ
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
@@ -89,9 +98,9 @@ function handleOfferRequest(userId, input, state) {
     requestedByUser: Boolean(input?.requested_by_user),
     userAffirmed: Boolean(input?.user_affirmed),
   });
-  console.log(
-    `[offer] ${userId} stage=${input?.stage} affirmed=${input?.user_affirmed} → ${check.ok ? "approved" : check.next ?? `rejected (${check.why})`} / ${input?.reason ?? ""}`,
-  );
+  const result = check.ok ? "承認（案内カードを表示）" : check.next ? "意思確認の質問をするよう指示" : `却下（${check.why}）`;
+  state.events.push(`案内の申請［${input?.stage ?? "?"}］→ ${result}`);
+  console.log(`[offer] ${userId} stage=${input?.stage} affirmed=${input?.user_affirmed} → ${result} / ${input?.reason ?? ""}`);
   if (check.next === "ask_confirmation") {
     return {
       approved: false,
@@ -106,24 +115,27 @@ function handleOfferRequest(userId, input, state) {
 }
 
 /**
- * 相談者のメッセージに対する占い師の返信を返す。
- * { text, offer } … offer が true なら返信のあとに案内カードを出す
+ * 相談者のメッセージに対する返信を作る。
+ * 戻り値 { text, offer, events } … offer が true なら返信のあとに案内カードを出す。events は判断の記録
  * 会話履歴・相談回数の記録もここで行う。
  */
 export async function replyAsFortuneTeller(userId, userText, { waitedMinutes = 0, messageCount = 1 } = {}) {
+  const ctx = current();
+  const { messages: texts } = ctx.settings;
   noteCrisisSignals(userId, userText);
   countUserTurn(userId);
   const lines = [stamp(), timingLine(waitedMinutes, messageCount), offerContextLine(userId)].filter(Boolean);
   const userContent = `${lines.join("\n")}\n${userText}`;
-  const state = { offer: false };
+  const state = { offer: false, events: [] };
   const messages = [...getHistory(userId), { role: "user", content: userContent }];
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
-    const response = await callClaude(messages);
+    const response = await callClaude(ctx, messages);
 
     if (response.stop_reason === "refusal") {
       console.warn("[claude] refusal", response.stop_details?.category ?? "");
-      return { text: REFUSAL_REPLY, offer: false };
+      state.events.push("AIが応答を控えました（定型文で返信）");
+      return { text: texts.refusal, offer: false, events: state.events };
     }
 
     const toolUses = response.content.filter((b) => b.type === "tool_use");
@@ -135,6 +147,7 @@ export async function replyAsFortuneTeller(userId, userText, { waitedMinutes = 0
           try {
             const result =
               use.name === offerTool.name ? handleOfferRequest(userId, use.input, state) : runTool(use.name, use.input);
+            if (use.name !== offerTool.name) state.events.push(`道具「${use.name}」の結果: ${JSON.stringify(result)}`);
             console.log(`[tool] ${use.name}`, JSON.stringify(result));
             return { type: "tool_result", tool_use_id: use.id, content: JSON.stringify(result) };
           } catch (err) {
@@ -152,15 +165,15 @@ export async function replyAsFortuneTeller(userId, userText, { waitedMinutes = 0
       .trim();
     if (!text) {
       console.warn("[claude] empty reply", response.stop_reason);
-      return { text: FALLBACK_REPLY, offer: false };
+      return { text: texts.error, offer: false, events: state.events };
     }
     if (response.stop_reason === "max_tokens") console.warn("[claude] reply hit max_tokens");
 
     appendTurn(userId, userContent, text);
     if (state.offer) recordOffer(userId);
-    return { text, offer: state.offer };
+    return { text, offer: state.offer, events: state.events };
   }
 
   console.warn("[claude] too many tool rounds");
-  return { text: FALLBACK_REPLY, offer: false };
+  return { text: texts.error, offer: false, events: state.events };
 }

@@ -1,7 +1,7 @@
 {
   "name": "line-fortune-bot",
   "version": "1.0.0",
-  "description": "公式LINE向け 占い師キャラクター自動返信ボット（LINE Messaging API + Claude）",
+  "description": "公式LINE キャラクター自動返信ツール（管理画面で設定・占い師テンプレート付き）",
   "type": "module",
   "private": true,
   "engines": {

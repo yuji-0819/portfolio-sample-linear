@@ -1,4 +1,5 @@
 ---
+enabled: false
 name: 数秘術
 ---
 

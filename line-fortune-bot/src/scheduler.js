@@ -5,7 +5,7 @@
 // - 深夜は返さず、朝になってから返す
 // - ただし命に関わる言葉があるときは、待たせずにすぐ返す
 // 予約はファイルに保存されるので、再起動しても消えない
-import { config } from "./config.js";
+import { getSettings } from "./settings.js";
 import { allJobs, deleteJob, getJob, setJob } from "./store.js";
 import { isCrisisText } from "./offer.js";
 
@@ -14,8 +14,9 @@ const rand = (a, b) => a + Math.random() * (b - a);
 
 const hourFmt = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", hour: "numeric", hourCycle: "h23" });
 function inQuietHours(t) {
-  const q = config.delay.quietHours;
-  if (!q || q.start === q.end) return false;
+  const { quietEnabled, quietStart, quietEnd } = getSettings().timing;
+  const q = { start: quietStart, end: quietEnd };
+  if (!quietEnabled || q.start === q.end) return false;
   const h = Number(hourFmt.format(t));
   return q.start < q.end ? h >= q.start && h < q.end : h >= q.start || h < q.end;
 }
@@ -31,7 +32,7 @@ function skipQuietHours(t) {
 const waitingConsults = () => allJobs().filter((j) => j.kind === "consult").length;
 
 function pickDueAt(now) {
-  const { minMinutes, maxMinutes, perPendingMinutes } = config.delay;
+  const { minMinutes, maxMinutes, perPendingMinutes } = getSettings().timing;
   // 短めが多く、ときどき長め
   const minutes = minMinutes + (maxMinutes - minMinutes) * Math.random() ** 1.5 + waitingConsults() * perPendingMinutes;
   return skipQuietHours(now + minutes * MIN);
@@ -56,8 +57,9 @@ export function queueConsult({ convoId, userId, sourceType, text, replyToken, ma
 }
 
 /** 決まったメッセージを少し後に送る（購入スクショへのお礼など） */
-export function queueSend({ convoId, userId, replyToken, messages, minMinutes, maxMinutes }) {
-  const dueAt = Date.now() + rand(minMinutes, maxMinutes) * MIN;
+export function queueSend({ convoId, userId, replyToken, messages }) {
+  const { purchaseMinMinutes, purchaseMaxMinutes } = getSettings().timing;
+  const dueAt = Date.now() + rand(purchaseMinMinutes, purchaseMaxMinutes) * MIN;
   setJob(`${convoId}:send`, { kind: "send", convoId, userId, replyToken, messages, dueAt });
   return dueAt;
 }

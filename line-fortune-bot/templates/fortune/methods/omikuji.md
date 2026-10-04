@@ -1,4 +1,5 @@
 ---
+enabled: false
 name: 今日のおみくじ
 tools: draw_random
 ---

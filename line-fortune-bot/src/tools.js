@@ -75,12 +75,12 @@ const definitions = {
   },
 };
 
-// 占術ファイルで指定された道具だけを有効にする
+// メニューで指定された道具だけを有効にする
 export function toolsFor(methods) {
   const names = [...new Set(methods.flatMap((m) => m.tools))].filter((n) => definitions[n]);
   for (const m of methods) {
     for (const t of m.tools) {
-      if (!definitions[t]) console.warn(`[warn] ${m.file}: 不明な tools 指定 "${t}" は無視します`);
+      if (!definitions[t]) console.warn(`[warn] ${m.name}: 不明な道具 "${t}" は無視します`);
     }
   }
   return names.map((n) => definitions[n]);

@@ -53,6 +53,15 @@ export function updateClient(id, patch) {
   return next;
 }
 
+export function deleteClient(id) {
+  delete clients[id];
+  save();
+}
+
+export function countClients() {
+  return Object.keys(clients).filter((id) => !id.startsWith("admin-test")).length;
+}
+
 export function nextCaseNo() {
   meta.lastCaseNo += 1;
   save();
