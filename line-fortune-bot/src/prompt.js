@@ -10,7 +10,7 @@ const METHODS_DIR = path.join(FORTUNE_DIR, "methods");
 const read = (file) => fs.readFileSync(path.join(FORTUNE_DIR, file), "utf8").trim();
 
 // 先頭の --- で囲まれた部分（name / tools）を読み取る
-function parseFrontMatter(text) {
+export function parseFrontMatter(text) {
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
   if (!match) return { meta: {}, body: text.trim() };
   const meta = {};
@@ -44,7 +44,7 @@ export function loadWelcomeMessage() {
   return read("welcome.txt");
 }
 
-export function buildSystemPrompt(methods) {
+export function buildSystemPrompt(methods, extraSections = []) {
   const methodSection = methods.length
     ? [
         "使ってよい占術は次のとおりです。相談内容に合う術を選んで鑑定してください。ここにない占術は使わないでください。",
@@ -56,12 +56,13 @@ export function buildSystemPrompt(methods) {
     "あなたは公式LINEアカウントで相談者とやり取りする占い師です。以下のキャラクター設定になりきって、LINEのトークで自然に会話してください。",
     `<persona>\n${read("persona.md")}\n</persona>`,
     `<methods>\n${methodSection}\n</methods>`,
+    ...extraSections.filter(Boolean),
     `<rules>\n${read("rules.md")}\n</rules>`,
     [
       "<format>",
       "- 返信はそのままLINEのトークに表示されます。Markdown記法（#、**、表、コードブロック）は使わず、プレーンテキストで書いてください。",
       "- ツールでカードや結果を引いた場合は、その結果だけを使い、結果を自分で作り変えないでください。",
-      "- 各ユーザーメッセージ冒頭の [受信日時: …] はシステムが付けたものです。日付や年齢、運勢の時期の計算に使ってください。返信の中で引用する必要はありません。",
+      "- 各ユーザーメッセージ冒頭の [受信日時: …] と [相談者の状況: …] はシステムが付けたものです。日付・年齢・時期の計算や、案内のタイミングの判断に使ってください。返信の中で引用しないでください。",
       "</format>",
     ].join("\n"),
   ].join("\n\n");

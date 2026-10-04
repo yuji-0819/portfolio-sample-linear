@@ -7,7 +7,8 @@ import { clearHistory } from "./history.js";
 import { loadWelcomeMessage } from "./prompt.js";
 import { toLineMessages } from "./line.js";
 
-const USER = "local-test-user";
+// 実際の相談者と記録が混ざらないよう、起動ごとに別のIDを使う
+const USER = `local-test-${Date.now()}`;
 const rl = readline.createInterface({ input, output });
 
 console.log(`占術: ${fortuneInfo.methods.join(", ") || "（指定なし）"} / 道具: ${fortuneInfo.tools.join(", ") || "なし"}`);
@@ -25,7 +26,8 @@ while (true) {
   }
   try {
     const reply = await replyAsFortuneTeller(USER, text);
-    for (const m of toLineMessages(reply)) console.log(`\n占い師> ${m.text}`);
+    for (const m of toLineMessages(reply.text)) console.log(`\n占い師> ${m.text}`);
+    if (reply.offer) console.log("\n［ここに個別鑑定の案内カード（BASEで申し込むボタン）が表示されます］");
     console.log();
   } catch (err) {
     console.error("エラー:", err.message);

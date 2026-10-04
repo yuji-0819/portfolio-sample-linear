@@ -4,17 +4,28 @@ import { config } from "./config.js";
 import { buildSystemPrompt, loadMethods } from "./prompt.js";
 import { runTool, toolSchemas, toolsFor } from "./tools.js";
 import { appendTurn, getHistory } from "./history.js";
+import {
+  checkOffer,
+  countUserTurn,
+  noteCrisisSignals,
+  offerContextLine,
+  offerEnabled,
+  offerPromptSection,
+  offerTool,
+  recordOffer,
+} from "./offer.js";
 
 const client = new Anthropic();
 
 // 起動時に一度だけ組み立てる（毎回同じ内容にしてプロンプトキャッシュを効かせる）
 const methods = loadMethods();
-const system = buildSystemPrompt(methods);
-const tools = toolSchemas(toolsFor(methods));
+const system = buildSystemPrompt(methods, [offerPromptSection()]);
+const tools = [...toolSchemas(toolsFor(methods)), ...(offerEnabled ? [offerTool] : [])];
 
 export const fortuneInfo = {
   methods: methods.map((m) => m.name),
   tools: tools.map((t) => t.name),
+  offer: offerEnabled,
 };
 
 const MAX_TOOL_ROUNDS = 5;
@@ -60,12 +71,27 @@ async function callClaude(messages) {
   });
 }
 
+// 案内カードの申請：出してよいかはプログラムが判定する
+function handleOfferRequest(userId, input, state) {
+  if (state.offer) return { approved: true, note: "この返信ではすでに承認済み" };
+  const check = checkOffer(userId, { requestedByUser: Boolean(input?.requested_by_user) });
+  console.log(`[offer] ${userId} stage=${input?.stage} approved=${check.ok} ${check.why ?? ""} / ${input?.reason ?? ""}`);
+  if (!check.ok) return { approved: false, reason: check.why };
+  state.offer = true;
+  return { approved: true };
+}
+
 /**
- * 相談者のメッセージに対する占い師の返信テキストを返す。
- * 会話履歴の保存もここで行う。
+ * 相談者のメッセージに対する占い師の返信を返す。
+ * { text, offer } … offer が true なら返信のあとに案内カードを出す
+ * 会話履歴・相談回数の記録もここで行う。
  */
 export async function replyAsFortuneTeller(userId, userText) {
-  const userContent = `${stamp()}\n${userText}`;
+  noteCrisisSignals(userId, userText);
+  countUserTurn(userId);
+  const context = offerContextLine(userId);
+  const userContent = `${stamp()}\n${context ? `${context}\n` : ""}${userText}`;
+  const state = { offer: false };
   const messages = [...getHistory(userId), { role: "user", content: userContent }];
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
@@ -73,7 +99,7 @@ export async function replyAsFortuneTeller(userId, userText) {
 
     if (response.stop_reason === "refusal") {
       console.warn("[claude] refusal", response.stop_details?.category ?? "");
-      return REFUSAL_REPLY;
+      return { text: REFUSAL_REPLY, offer: false };
     }
 
     const toolUses = response.content.filter((b) => b.type === "tool_use");
@@ -83,7 +109,8 @@ export async function replyAsFortuneTeller(userId, userText) {
         role: "user",
         content: toolUses.map((use) => {
           try {
-            const result = runTool(use.name, use.input);
+            const result =
+              use.name === offerTool.name ? handleOfferRequest(userId, use.input, state) : runTool(use.name, use.input);
             console.log(`[tool] ${use.name}`, JSON.stringify(result));
             return { type: "tool_result", tool_use_id: use.id, content: JSON.stringify(result) };
           } catch (err) {
@@ -101,14 +128,15 @@ export async function replyAsFortuneTeller(userId, userText) {
       .trim();
     if (!text) {
       console.warn("[claude] empty reply", response.stop_reason);
-      return FALLBACK_REPLY;
+      return { text: FALLBACK_REPLY, offer: false };
     }
     if (response.stop_reason === "max_tokens") console.warn("[claude] reply hit max_tokens");
 
     appendTurn(userId, userContent, text);
-    return text;
+    if (state.offer) recordOffer(userId);
+    return { text, offer: state.offer };
   }
 
   console.warn("[claude] too many tool rounds");
-  return FALLBACK_REPLY;
+  return { text: FALLBACK_REPLY, offer: false };
 }
